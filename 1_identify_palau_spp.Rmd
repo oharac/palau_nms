@@ -37,7 +37,7 @@ Having identified cells in the Palau EEZ, using the 100 km^2^ cell and EEZ map a
 
 ## Identify Palau EEZ cells
 
-Palau EEZ for OHI is region 8.
+Palau EEZ for OHI is region 8.  This can be updated later using the Palau EEZ shapefile but should be a good start for now.
 
 ```{r}
 
@@ -54,79 +54,66 @@ write_csv(eez_cells_df, 'spatial/palau_cell_ids.tif')
 
 ## Get all the species in each cell using the original raster extracts
 
-``` {r get_spp_in_cells_of_interest}
+Pull the species IDs from the rasterized species maps.  For each map (as a `.csv` file), check whether the `cell_id`s in the Palau EEZ match `cell_id`s within the species map.  If so, flag it as local, and copy to a folder in Github.
 
-cells_info <- read_csv(cell_summary_file)
+``` {r get_spp_in_palau_eez}
 
-# spp_gps_all <- cells_info$spp_gp %>% unique()
-  ### all are represented here...
+palau_spp_maps_file <- 'data/palau_spp_maps.csv'
 
-spp_maps <- read_csv(file.path(dir_data, sprintf('spp_marine_maps_%s.csv', api_version)),
-                     col_types = 'ddciccc')
-
-taxa_cells_file <- file.path(dir_git, 'data_explore', 'taxa_spp_cells.csv')
-
-reload <- FALSE
-
-if(!file.exists(taxa_cells_file) | reload == TRUE) {
-  ### Make a list of taxonomic groups to loop over:
-  taxa <- spp_maps$dbf_file %>%
-    unique() %>%
-    str_replace('\\....$', '')
+if(!file.exists(palau_spp_maps_file)) {
   
-  taxa_cells_list <- vector('list', length = length(taxa))
+  spp_rasts <- list.files(file.path(dir_o_anx, 'spp_rasters'), full.names = TRUE)
+  palau_eez_cells <- eez_cells_df$cell_id
   
-  for(i in seq_along(taxa)) { ### i <- 5
-    taxon <- taxa[i]
-    
-    spp_ids_in_taxon <- spp_maps %>%
-      filter(str_detect(dbf_file, taxon)) %>%
-      .$iucn_sid
-    cat(sprintf('processing %s spp in %s...\n', length(spp_ids_in_taxon), taxon))
-    
-    spp_cells <- parallel::mclapply(spp_ids_in_taxon, mc.cores = 32,
-      FUN = function(x) { ### x <- spp_ids_in_taxon[1]
-        f <- file.path(dir_o_anx, 'spp_rasters',
-                       sprintf('iucn_sid_%s_010deg.csv', x))
-        if(file.exists(f)) {
-          y <- read_csv(f, col_types = 'di') %>%
-            mutate(iucn_sid = x) %>%
-            select(-presence)  %>%
-            filter(cell_id %in% cells_info$cell_id)
-        } else {
-          y <- data.frame(cell_id = NA,
-                          iucn_sid = x, 
-                          f = f, error = 'file not found')
-        }
-        return(y)
-      }) %>%
-      bind_rows() %>%
-      mutate(spp_gp = taxon)
-    
-    taxa_cells_list[[i]] <- spp_cells
+  for(i in seq_along(spp_rasts)) {
+    ### i <- 1
+    rast <- spp_rasts[i]
+    message('processing ', i, ' of ', length(spp_rasts), ': ', basename(rast))
+    rast_cells <- read_csv(rast) %>%
+      filter(cell_id %in% palau_eez_cells)
+    if(nrow(rast_cells) == 0) {
+      palau_spp_df$in_eez <- FALSE
+    } else {
+      palau_spp_df$in_eez <- TRUE
+      write_csv(rast_cells, file.path('spp_rasts', basename(rast)))
+    }
   }
+
+  ### Create a dataframe showing which species are found in the Palau EEZ
+  palau_spp_df <- data.frame(spp_rast = basename(spp_rasts), in_eez = NA) %>%
+    mutate(spp_id = str_extract(spp_rasts, '[0-9]+') %>% as.integer()) %>%
+    mutate(in_eez = file.exists(file.path('spp_rasts', spp_rast)))
   
-  taxa_cells_df <- taxa_cells_list %>%
-    bind_rows()  %>%
-    filter(!is.na(cell_id)) %>%
-    select(cell_id, iucn_sid, spp_gp) %>%
-    left_join(spp_maps %>% select(iucn_sid, max_depth), by = 'iucn_sid') %>%
-    distinct() 
-  
-  write_csv(taxa_cells_df, taxa_cells_file)
+  write_csv(palau_spp_df, palau_spp_maps_file)
 }
 
 ```
 
-``` {r attach_spp_cell_info}
+``` {r attach_spp_info}
 
-spp_risk <- read_csv(file.path(dir_data, sprintf('iucn_risk_current_%s.csv', api_version)),
-                     col_types = 'dc_____d_') %>%
-  distinct()
+spp_risk <- read_csv('data/iucn_risk_current_2019-2.csv') %>%
+  arrange(cat_score) %>%
+  mutate(cat = fct_inorder(cat))
+  
 
-spp_risk_rgn <- read_csv(file.path(dir_data, sprintf('iucn_risk_rgn_current_%s.csv', api_version)),
-                         col_types = 'dc_cd_') %>%
-  distinct()
+palau_spp <- read_csv(palau_spp_maps_file) %>%
+  filter(in_eez) %>%
+  left_join(spp_risk, by = c('spp_id' = 'iucn_sid')) %>%
+  filter(!is.na(cat))
+
+ggplot(palau_spp, aes(x = cat, fill = cat)) +
+  geom_bar() +
+  theme_classic() +
+  scale_fill_manual(values = c('green4', 'yellow3', 'orange2', 'red3', 'red4', 'grey60')) +
+  labs(x = 'IUCN conservation status',
+       y = 'Log (count)') +
+  scale_y_log10()
+
+DT::datatable(palau_spp %>% select(-spp_rast, -old_cat, -in_eez))
+```
+
+
+``` {r old stuff, eval = FALSE}
 
 spp_ranges   <- read_csv(file.path(dir_data, sprintf('iucn_spp_range_area_%s.csv', api_version)),
                          col_types = 'dd__') %>%
@@ -171,360 +158,5 @@ write_csv(spp_cells_info, file.path(dir_git, 'data_explore', 'spp_cells_scores.c
 
 ```
 
-## Display points on a map and show the species list
-
-For each cell group, plot a map of range-rarity-weighted risk; display the cells for that region on the map; 
-``` {r create_global_map_w_points}
-
-spp_cells_info <- read_csv(file.path(dir_git, 'data_explore', 'spp_cells_scores.csv'),
-                           col_types = 'ddcccddcdc') %>%
-  arrange(cell_group)
-
-land_poly <- sf::read_sf(file.path(dir_git, 'spatial/ne_10m_land/ne_10m_land.shp'))
-
-
-cell_id_file <- file.path(dir_git, 'data_explore/cell_id_latlong.csv')
-if(!file.exists(cell_id_file)) {
-  cell_id_df     <- raster(file.path(dir_git, 'output', 'cell_id_raster.tif')) %>%
-    rasterToPoints() %>%
-    as.data.frame() %>%
-    setNames(c('x', 'y', 'cell_id')) %>%
-    filter(cell_id %in% spp_cells_info$cell_id) %>%
-    write_csv(cell_id_file)
-} else {
-  cell_id_df <- read_csv(cell_id_file)
-}
-
-fig_file <- file.path(dir_git, 'data_explore/figs',
-                    sprintf('global_map_pts_of_interest.png'))
-
-message(sprintf('Mapping cells for global cells of interest'))
-
-### Attach lat/long values to cell IDs
-groups_latlong <- spp_cells_info %>% 
-  select(cell_id, cell_group) %>% 
-  distinct() %>%
-  left_join(cell_id_df, by = 'cell_id') %>%
-  group_by(cell_group) %>%
-  summarize(x = mean(x), y = mean(y))
-  
-if(!file.exists(fig_file)) {
-  ### create the image and save it
-  
-  if(!exists('rr_risk_df')) {
-    rr_risk_df <- raster(file.path(dir_git, 'output', 'mean_rr_risk_raster_010deg.tif')) %>%
-      rasterToPoints() %>%
-      as.data.frame() %>%
-      setNames(c('x', 'y', 'rr_risk'))
-  }
-  
-  x <- ggplot(rr_risk_df) +
-    ggtheme_map() +
-    geom_raster(aes(x, y, fill = rr_risk)) +
-    geom_sf(data = land_poly, aes(geometry = geometry), fill = 'grey96', color = 'grey40', size = .10) +
-    geom_point(data = groups_latlong, aes(x, y), 
-               shape = 21, color = 'white', fill = 'white', size = 2.5) +
-    geom_point(data = groups_latlong, aes(x, y), 
-               shape = 21, color = 'blue', fill = 'yellow', size = 2) +
-    scale_fill_gradientn(colors = c('green4', 'lightyellow', 'red2', 'red3', 'red4', 'purple4'),
-                         limits = c(0, 1),
-                         labels = c('LC', 'NT', 'VU', 'EN', 'CR', 'EX'),
-                         breaks = c( 0.0,  0.2,  0.4,  0.6,  0.8,  1.0)) +
-    scale_x_continuous(expand = c(0, 0)) +
-    scale_y_continuous(expand = c(0, 0)) +
-    labs(title = 'Global areas of interest',
-         fill  = 'risk')
-  
-  ggsave(plot = x, file = fig_file,
-         width = 6, height = 4, units = 'in', dpi = 300)
-}
-
-knitr::include_graphics(path.expand(fig_file))
-
-```
-
-### Region maps with spp data
-
-``` {r create_rgn_maps_w_points}
-
-cell_gps <- unique(spp_cells_info$cell_group)
-
-spp_cell_gps <- vector('list', length = length(cell_gps)) %>%
-  setNames(cell_gps)
-fig_files <- vector('list', length = length(cell_gps)) %>%
-  setNames(cell_gps)
-
-for(cell_gp in cell_gps) {
-  ### cell_gp <- cell_gps[1]
-  
-  fig_file <- file.path(dir_git, 'data_explore/figs',
-                      sprintf('rgn_map_%s.png', 
-                              tolower(cell_gp) %>% str_replace_all('[^a-z0-9]', '_')))
-
-  message(sprintf('Mapping cells for area of interest: %s\n', cell_gp))
-
-  ### Attach lat/long values to cell IDs
-  cells_latlong <- spp_cells_info %>% 
-    filter(cell_group == cell_gp) %>%
-    select(cell_id, depth) %>% 
-    distinct() %>%
-    left_join(cell_id_df, by = 'cell_id') %>%
-    arrange(cell_id) %>%
-    mutate(cell_name = toupper(letters[1:n()]))
-  
-  spp_cell_gps[[cell_gp]] <- spp_cells_info %>%
-    filter(cell_group == cell_gp) %>%
-    left_join(cells_latlong, by = c('cell_id', 'depth')) %>%
-    select(-x, -y, -cell_group, -cell_id, -depth) %>%
-    mutate(present = TRUE) %>%
-    spread(cell_name, present, fill = FALSE)
-
-  if(!file.exists(fig_file)) {
-    ### create the image and save it
-    
-    if(!exists('rr_risk_df')) {
-      rr_risk_df <- raster(file.path(dir_git, 'output', 'mean_rr_risk_raster_010deg.tif')) %>%
-        rasterToPoints() %>%
-        as.data.frame() %>%
-        setNames(c('x', 'y', 'rr_risk'))
-    }
-    
-    ### define bounding box with some margin around it:
-    bbox <- c(xmin = max(min(cells_latlong$x) - 4, -179.95),
-              xmax = min(max(cells_latlong$x) + 4,  179.95),
-              ymin = max(min(cells_latlong$y) - 2,  -89.95),
-              ymax = min(max(cells_latlong$y) + 2,   89.95))
-    
-    depth_label <- sprintf('Depths: %s', 
-                           paste0(cells_latlong$cell_name, ': ', 
-                                  cells_latlong$depth, ' m', 
-                                  collapse = '; '))
-      
-    x <- ggplot(rr_risk_df) +
-      ggtheme_map() +
-      geom_raster(aes(x, y, fill = rr_risk)) +
-      geom_sf(data = land_poly, aes(geometry = geometry), fill = 'grey96', color = 'grey40', size = .10) +
-      geom_point(data = cells_latlong, aes(x, y), 
-                 shape = 21, color = 'blue', fill = 'yellow', size = 2) +
-      geom_text(data = cells_latlong, aes(x, y, label = cell_name),
-                nudge_x = .15, nudge_y = .15) +
-      scale_fill_gradientn(colors = c('green4', 'lightyellow', 'red2', 'red3', 'red4', 'purple4'),
-                           limits = c(0, 1),
-                           labels = c('LC', 'NT', 'VU', 'EN', 'CR', 'EX'),
-                           breaks = c( 0.0,  0.2,  0.4,  0.6,  0.8,  1.0)) +
-      annotate('text', x = bbox[1] + .05, y = bbox[3] + .05,
-               label = depth_label, hjust = 0, vjust = 0) +
-      coord_sf(xlim = c(bbox[1], bbox[2]),  ylim = c(bbox[3], bbox[4])) +
-      scale_x_continuous(expand = c(0, 0)) +
-      scale_y_continuous(expand = c(0, 0)) +
-      labs(title = cell_gp,
-           fill  = 'mean risk')
-    
-    ggsave(plot = x, file = fig_file,
-           width = 6, height = 4, units = 'in', dpi = 300)
-  }
-  
-  fig_files[[cell_gp]] <- fig_file
-
-}
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[1]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[2]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[3]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[4]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[5]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[6]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[7]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[8]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[9]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[10]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[11]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[12]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[13]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[14]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[15]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[16]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[17]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
-
------
-
-``` {r}
-
-cell_gp <- cell_gps[18]
-
-knitr::include_graphics(path.expand(fig_files[[cell_gp]]))
-
-DT::datatable(spp_cell_gps[[cell_gp]], caption = cell_gp)
-```
 
 

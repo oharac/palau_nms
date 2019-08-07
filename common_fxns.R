@@ -56,14 +56,14 @@ library(parallel)
 library(jsonlite)
 
 ### api_key stored on git-annex so outside users can use their own key
-# api_file <- file.path(dir_M, 'git-annex/globalprep/spp_ico', 
-#                       'api_key.csv')
-# api_key <- scan(api_file, what = 'character')
+api_file <- file.path(dir_M, 'git-annex/globalprep/spp_ico',
+                      'api_key.csv')
+api_key <- scan(api_file, what = 'character')
 
-# api_version <- fromJSON('http://apiv3.iucnredlist.org/api/v3/version') %>%
-#   .$version
+api_version <- fromJSON('http://apiv3.iucnredlist.org/api/v3/version') %>%
+  .$version
 
-api_version <- '2018-1'
+# api_version <- '2019-2'
 
 
 get_from_api <- function(url, param, api_key, delay) {
