@@ -110,6 +110,8 @@ ggplot(palau_spp, aes(x = cat, fill = cat)) +
   scale_y_log10()
 
 DT::datatable(palau_spp %>% select(-spp_rast, -old_cat, -in_eez))
+
+write_csv(palau_spp, 'output/palau_spp_and_risk.csv')
 ```
 
 
