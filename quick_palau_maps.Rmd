@@ -1,0 +1,173 @@
+---
+title: 'Quick biodiversity risk maps of Palau EEZ'
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float: yes
+    number_sections: true
+    theme: cerulean
+    highlight: haddock
+    includes: 
+      in_header: '~/github/ohibc/src/templates/ohibc_hdr1.html'
+  pdf_document:
+    toc: true
+---
+
+``` {r setup, echo = TRUE, message = FALSE, warning = FALSE}
+
+knitr::opts_chunk$set(fig.width = 6, fig.height = 4, # fig.path = 'figs/',
+                      echo = TRUE, message = FALSE, warning = FALSE)
+
+library(raster)
+library(data.table)
+library(sf)
+
+source('https://raw.githubusercontent.com/oharac/src/master/R/common.R')
+  ### includes library(tidyverse); library(stringr); 
+  ### dir_M points to ohi directory on Mazu; dir_O points to home dir on Mazu
+
+source('common_fxns.R')
+```
+
+# Summary
+
+Using Palau EEZ shapefile (and NMS etc) create quick maps showing biodiversity risk, species richness, etc.  These will be based on the output rasters from the biodiversity risk project rather than created anew for this project.
+
+```{r load Palau shapefile}
+### read in shapefiles (in WGS84) and transform to GP?
+# p_eez_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/Palau_EEZ.shp') %>%
+#   st_transform(gp_proj4)
+# p_nms_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/PNMS.shp') %>%
+#   st_transform(gp_proj4)
+# p_land_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/MainIsland_Baselines.shp') %>%
+#   st_transform(gp_proj4)
+
+### let's just read in and keep in WGS84.
+p_eez_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/Palau_EEZ.shp')
+p_nms_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/PNMS.shp')
+p_land_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/MainIsland_Baselines.shp')
+
+### get extent of the Palau EEZ for cropping rasters
+extent_p_eez <- extent(p_eez_sf)
+```
+
+```{r load rasters}
+
+dir_spp_risk <- '../spp_risk_dists/_output'
+
+### these are all in Gall-Peters equal area projection - reproject to WGS84...
+risk_un_rast   <- raster(file.path(dir_spp_risk, 'mean_risk_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+risk_rr_rast   <- raster(file.path(dir_spp_risk, 'mean_rr_risk_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+threat_un_rast <- raster(file.path(dir_spp_risk, 'pct_threat_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+threat_rr_rast <- raster(file.path(dir_spp_risk, 'sr_rr_pct_threat_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+n_spp_rast     <- raster(file.path(dir_spp_risk, 'n_spp_risk_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+n_rr_rast      <- raster(file.path(dir_spp_risk, 'sr_rr_risk_raster_comp.tif')) %>%
+  projectRaster(crs = crs(p_eez_sf), method = 'ngb') %>%
+  crop(extent_p_eez)
+
+```
+
+```{r}
+rast_to_df <- function(rast, val = 'value') {
+  rast_df <- rasterToPoints(rast) %>%
+    as.data.frame() %>%
+    setNames(c('long', 'lat', val))
+}
+plot_palau_sf <- function() {
+  
+}
+
+```
+
+### Unweighted biodiversity risk
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(risk_un_rast), aes(long, lat, fill = value)) +
+  scale_fill_risk() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+### Range-rarity-weighted biodiversity risk
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(risk_rr_rast), aes(long, lat, fill = value)) +
+  scale_fill_risk() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+### Species richness
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(n_spp_rast), aes(long, lat, fill = value)) +
+  scale_fill_viridis_c() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+### Range-rarity-weighted species richness
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(n_rr_rast), aes(long, lat, fill = value)) +
+  scale_fill_viridis_c() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+### Proportion of threatened species
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(threat_un_rast), aes(long, lat, fill = value)) +
+  scale_fill_threat() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+### Range-rarity-weighted proportion of threatened species
+
+```{r}
+ggplot() +
+  ggtheme_map() +
+  geom_raster(data = rast_to_df(threat_rr_rast), aes(long, lat, fill = value)) +
+  scale_fill_threat() +
+  geom_sf(data = p_eez_sf, color = 'cyan', fill = NA) +
+  geom_sf(data = p_nms_sf, color = 'red', fill = NA) +
+  geom_sf(data = p_land_sf, alpha = .5, color = 'grey40', fill = 'grey60') +
+  coord_sf(datum = NA)
+```
+
+

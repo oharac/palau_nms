@@ -19,6 +19,14 @@ risk_vals <- c(0, .2, .3, .4, .5, .7, 1.0)
 risk_lbls <- c('LC', 'NT', 'VU', 'EN', 'CR', 'EX')
 risk_brks <- c( 0.0,  0.2,  0.4,  0.6,  0.8,  1.0)
 
+scale_fill_risk <- function() {
+  scale_fill_gradientn(colors = risk_cols, 
+                       values = risk_vals, 
+                       limits = c(0, 1),
+                       labels = risk_lbls, 
+                       breaks = risk_brks)
+}
+  
 ### This color scheme and label scheme matches the pct threatened maps
 thr_cols <- viridis::viridis(6, direction = +1)
 thr_vals <- c(0, .25, .33, .42, .50, 1)
@@ -26,6 +34,13 @@ thr_vals <- c(0, .25, .33, .42, .50, 1)
 thr_brks <- c(0, .25, .50, .75, 1)
 thr_lbls <- c('0%', '25%', '50%', '75%', '100%')
 
+scale_fill_threat <- function(gg) {
+  scale_fill_gradientn(colors = thr_cols, 
+                       values = thr_vals, 
+                       limits = c(0, 1),
+                       labels = thr_lbls, 
+                       breaks = thr_brks)
+}
 
 ### cat if not knitting; message if knitting
 
