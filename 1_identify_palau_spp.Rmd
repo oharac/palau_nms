@@ -18,11 +18,12 @@ output:
 
 ``` {r setup, echo = TRUE, message = FALSE, warning = FALSE}
 
-knitr::opts_chunk$set(fig.width = 6, fig.height = 4, fig.path = 'figs/',
+knitr::opts_chunk$set(fig.width = 6, fig.height = 4, # fig.path = 'figs/',
                       echo = TRUE, message = FALSE, warning = FALSE)
 
 library(raster)
 library(data.table)
+library(sf)
 
 source('https://raw.githubusercontent.com/oharac/src/master/R/common.R')
   ### includes library(tidyverse); library(stringr); 
@@ -39,16 +40,37 @@ Having identified cells in the Palau EEZ, using the 100 km^2^ cell and EEZ map a
 
 Palau EEZ for OHI is region 8.  This can be updated later using the Palau EEZ shapefile but should be a good start for now.
 
-```{r}
+```{r use Palau EEZ polygons to identify regions}
+
+palau_eez_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/Palau_EEZ.shp') %>%
+  st_transform(gp_proj4)
+
+palau_nms_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/PNMS.shp') %>%
+  st_transform(gp_proj4)
+
+palau_terr_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/Territorial_Seas_12M.shp') %>%
+  st_transform(gp_proj4) %>%
+  st_zm()
 
 cell_id_rast <- raster('spatial/cell_id_rast.tif')
-eez_rast     <- raster('spatial/eez_rast.tif')
 
-eez_cells_df <- data.frame(cell_id = values(cell_id_rast),
-                           eez     = values(eez_rast)) %>%
-  filter(eez == 8)
+palau_eez_rast <- cell_id_rast %>%
+  mask(palau_eez_sf) %>%
+  trim()
+palau_nms_rast <- cell_id_rast %>%
+  mask(palau_nms_sf) %>%
+  crop(palau_eez_rast)
+palau_terr_rast <- cell_id_rast %>%
+  mask(palau_terr_sf) %>%
+  crop(palau_eez_rast)
 
-write_csv(eez_cells_df, 'spatial/palau_cell_ids.tif')
+palau_cells_df <- data.frame(
+  eez = values(palau_eez_rast),
+  nms = values(palau_nms_rast),
+  terr = values(palau_terr_rast)) %>%
+  gather(zone, cell_id, na.rm = TRUE) 
+
+write_csv(palau_cells_df, 'spatial/palau_cell_ids.csv')
 
 ```
 
@@ -58,60 +80,151 @@ Pull the species IDs from the rasterized species maps.  For each map (as a `.csv
 
 ``` {r get_spp_in_palau_eez}
 
-palau_spp_maps_file <- 'data/palau_spp_maps.csv'
+palau_spp_copied_flag <- 'spatial/palau_spp_copied.csv'
 
-if(!file.exists(palau_spp_maps_file)) {
+if(!file.exists(palau_spp_copied_flag)) {
+  
+  palau_eez_cells <- read_csv('spatial/palau_cell_ids.csv') %>%
+    filter(zone == 'eez') %>%
+    .$cell_id
   
   spp_rasts <- list.files(file.path(dir_o_anx, 'spp_rasters'), full.names = TRUE)
-  palau_eez_cells <- eez_cells_df$cell_id
-  
-  for(i in seq_along(spp_rasts)) {
-    ### i <- 1
-    rast <- spp_rasts[i]
-    message('processing ', i, ' of ', length(spp_rasts), ': ', basename(rast))
+
+  copy_if_palau <- function(rast, eez_cells) {
     rast_cells <- read_csv(rast) %>%
-      filter(cell_id %in% palau_eez_cells)
+      filter(cell_id %in% eez_cells)
     if(nrow(rast_cells) == 0) {
-      palau_spp_df$in_eez <- FALSE
+      message('No Palau overlap for ', basename(rast))
     } else {
-      palau_spp_df$in_eez <- TRUE
       write_csv(rast_cells, file.path('spp_rasts', basename(rast)))
     }
   }
-
-  ### Create a dataframe showing which species are found in the Palau EEZ
-  palau_spp_df <- data.frame(spp_rast = basename(spp_rasts), in_eez = NA) %>%
-    mutate(spp_id = str_extract(spp_rasts, '[0-9]+') %>% as.integer()) %>%
-    mutate(in_eez = file.exists(file.path('spp_rasts', spp_rast)))
   
-  write_csv(palau_spp_df, palau_spp_maps_file)
+  parallel::mclapply(spp_rasts, FUN = copy_if_palau, 
+                     eez_cells = palau_eez_cells, 
+                     mc.cores = 20)
+
+  write_csv(data.frame(copied_flag = TRUE), palau_spp_copied_flag)
 }
 
 ```
 
-``` {r attach_spp_info}
+## Identify species in NMS and territorial waters
+
+By design, all species copied over are found in the EEZ.  Here we identify the subsets that fall within the NMS and within the territorial waters, respectively.
+
+```{r}
+
+spp_rasts <- list.files('spp_rasts', pattern = '.csv$', full.names = TRUE)
+spp_cells <- parallel::mclapply(spp_rasts, FUN = read_csv, mc.cores = 20) %>%
+  setNames(basename(spp_rasts)) %>%
+  bind_rows(.id = 'rast') %>%
+  mutate(iucn_sid = str_extract(rast, '[0-9]+') %>% as.integer) %>%
+  select(-rast)
+
+palau_cells_df <- read_csv('spatial/palau_cell_ids.csv')
+palau_nms_df <- palau_cells_df %>%
+  filter(zone == 'nms')
+palau_terr_df <- palau_cells_df %>%
+  filter(zone == 'terr')
+
+spp_eez <- spp_cells %>%
+  group_by(iucn_sid) %>%
+  summarize(area = 100 * n(),
+            zone = 'eez_km2')
+
+spp_nms <- spp_cells %>%
+  filter(cell_id %in% palau_nms_df$cell_id) %>%
+  group_by(iucn_sid) %>%
+  summarize(area = 100 * n(),
+            zone = 'nms_km2')
+
+spp_terr = spp_cells %>%
+  filter(cell_id %in% palau_terr_df$cell_id) %>%
+  group_by(iucn_sid) %>%
+  summarize(area = 100 * n(),
+            zone = 'terr_km2')
+
+spp_palau <- bind_rows(spp_eez, spp_nms, spp_terr) %>%
+  spread(zone, area, fill = 0)
+
+write_csv(spp_palau, 'data/palau_spp_maps.csv')
+
+```
+
+``` {r attach spp_taxa_info}
+
+spp_palau <- read_csv('data/palau_spp_maps.csv')
+
+taxa_info_file <- 'data/palau_spp_taxa_info_from_api_2019-2.csv'
+if(!file.exists(taxa_info_file)) {
+  spp_ids <- spp_palau$iucn_sid %>% unique()
+  spp_taxa_url <- 'http://apiv3.iucnredlist.org/api/v3/species/id/%s?token=%s'
+  spp_taxa_df <- mc_get_from_api(spp_info_url, spp_ids, api_key, delay = 1) %>%
+    clean_df_names()
+  write_csv(spp_taxa_df, taxa_info_file)
+}
+
+spp_taxa_df <- read_csv(taxa_info_file)
+
+spp_habs <- read_csv('data/spp_marine_from_api_2019-1.csv') %>%
+  filter(iucn_sid %in% spp_palau$iucn_sid) %>%
+  mutate(hab = str_split(habs, ', ')) %>%
+  unnest(hab) %>%
+  left_join(read_csv('raw/iucn_hab_categories.csv'), by = c('hab' = 'code'))
+
+spp_info_all <- spp_palau %>%
+  left_join(spp_taxa_df, by = 'iucn_sid') %>%
+  left_join(spp_habs, by = 'iucn_sid') %>%
+  transmute(iucn_sid,
+            eez_km2,
+            nms_km2,
+            terr_km2,
+            sciname = scientific_name,
+            kingdom = str_to_sentence(kingdom),
+            phylum = str_to_sentence(phylum),
+            class = str_to_sentence(class),
+            order = str_to_sentence(order),
+            family = str_to_sentence(family),
+            genus,
+            comname = main_common_name,
+            category,
+            criteria,
+            population_trend,
+            depth_upper,
+            depth_lower,
+            depth_class = max_depth,
+            hab,
+            habitat)
+
+write_csv(spp_info_all, 'output/palau_spp_info.csv')
+
+```
+
+``` {r}
 
 spp_risk <- read_csv('data/iucn_risk_current_2019-2.csv') %>%
   arrange(cat_score) %>%
   mutate(cat = fct_inorder(cat))
-  
 
-palau_spp <- read_csv(palau_spp_maps_file) %>%
-  filter(in_eez) %>%
-  left_join(spp_risk, by = c('spp_id' = 'iucn_sid')) %>%
-  filter(!is.na(cat))
+palau_spp <- read_csv('output/palau_spp_info.csv') %>%
+  select(iucn_sid, eez_km2, nms_km2, terr_km2) %>%
+  distinct() %>%
+  gather(zone, area, ends_with('km2')) %>%
+  left_join(spp_risk, by = c('iucn_sid')) %>%
+  filter(!is.na(cat)) %>%
+  filter(area > 0)
 
 ggplot(palau_spp, aes(x = cat, fill = cat)) +
   geom_bar() +
   theme_classic() +
   scale_fill_manual(values = c('green4', 'yellow3', 'orange2', 'red3', 'red4', 'grey60')) +
   labs(x = 'IUCN conservation status',
-       y = 'Log (count)') +
-  scale_y_log10()
+       y = 'Log (count)',
+       fill = 'IUCN risk') +
+  scale_y_log10() +
+  facet_wrap( ~ zone)
 
-DT::datatable(palau_spp %>% select(-spp_rast, -old_cat, -in_eez))
-
-write_csv(palau_spp, 'output/palau_spp_and_risk.csv')
 ```
 
 
