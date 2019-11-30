@@ -53,8 +53,6 @@ p_land_sf <- read_sf('spatial/Shapefiles_PICRC_DFZ/MainIsland_Baselines.shp')
 extent_p_eez <- extent(p_eez_sf)
 ### get the bbox
 extent_sf <- st_as_sfc(st_bbox(p_eez_sf), forceMulti = TRUE)
-### get land polygon
-land_poly <- read_sf('spatial/ne_10m_land/ne_10m_land_no_casp.shp')
 ```
 
 ```{r load rasters}
@@ -74,6 +72,10 @@ n_spp_rast     <- raster(file.path(dir_spp_risk, 'n_spp_risk_raster_comp.tif')) 
   projectRaster(crs = crs(p_eez_sf), method = 'ngb')
 n_rr_rast      <- raster(file.path(dir_spp_risk, 'sr_rr_risk_raster_comp.tif')) %>%
   projectRaster(crs = crs(p_eez_sf), method = 'ngb')
+
+### get land polygon
+land_poly <- read_sf('spatial/ne_10m_land/ne_10m_land_no_casp.shp') %>%
+  st_crop(risk_un_rast)
 
 ```
 
